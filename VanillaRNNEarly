@@ -1,3 +1,10 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+"""
+Created on Thu Oct 24 13:56:27 2019
+
+@author: manishrai
+"""
 
 import torch
 import torch.nn as nn
@@ -5,6 +12,10 @@ import torchvision.transforms as transforms
 import torchvision.datasets as dsets
 import argparse
 import numpy as np
+import pandas as pd
+from sklearn.model_selection import train_test_split
+from torch.autograd import Variable
+
 
 parser = argparse.ArgumentParser(description='PyTorch Wikitext-RNN - MNIST Model')
 parser.add_argument('--data', type=str, default='./data/wikitext-RNN',
@@ -13,31 +24,53 @@ parser.add_argument('--clip', type=float, default=0.25,
                     help='gradient clipping')
 args = parser.parse_args()
 
-train_dataset = dsets.MNIST(root='./data', 
-                            train=True, 
-                            transform=transforms.ToTensor(),
-                            download=True)
+train_dataset = pd.read_csv('train.csv',dtype = np.float32)
 
-test_dataset = dsets.MNIST(root='./data', 
-                           train=False, 
-                           transform=transforms.ToTensor())
-#We would have 60k training images of size 28 x 28 pixels.
+test_dataset = pd.read_csv('test.csv',dtype = np.float32)
+
+targets_numpy = train_dataset.label.values
+features_numpy = train_dataset.loc[:,train_dataset.columns != "label"].values/255 # normalization
+
+# Using SKLEARN we train test split. Size of train data is 80% and size of test data is 20%. 
+features_train, features_test, targets_train, targets_test = train_test_split(features_numpy,
+                                                                             targets_numpy,
+                                                                             test_size = 0.2,
+                                                                             random_state = 42) 
+
+# create feature and targets tensor for train set. As you remember we need variable to accumulate gradients. Therefore first we create tensor, then we will create variable
+featuresTrain = torch.from_numpy(features_train)
+targetsTrain = torch.from_numpy(targets_train).type(torch.LongTensor) # data type is long
+
+# create feature and targets tensor for test set.
+featuresTest = torch.from_numpy(features_test)
+targetsTest = torch.from_numpy(targets_test).type(torch.LongTensor) # data type is long
+
+# batch_size, epoch and iteration
+batch_size = 100
+n_iters = 10000
+num_epochs = n_iters / (len(features_train) / batch_size)
+num_epochs = int(num_epochs)
+
+# Pytorch train and test sets
+train = torch.utils.data.TensorDataset(featuresTrain,targetsTrain)
+test = torch.utils.data.TensorDataset(featuresTest,targetsTest)
+
+# data loader
+train_loader = torch.utils.data.DataLoader(train, batch_size = batch_size, shuffle = False)
+test_loader = torch.utils.data.DataLoader(test, batch_size = batch_size, shuffle = False)
 
 
-print(train_dataset.train_data.size())
+#print(train_dataset.train_data.size())
 
-print(train_dataset.train_labels.size())
+#print(train_dataset.train_labels.size())
 #Here we would have 10k testing images of the same size, 28 x 28 pixels.
 
 
-print(test_dataset.test_data.size())
+#print(test_dataset.test_data.size())
 
-print(test_dataset.test_labels.size())
+#print(test_dataset.test_labels.size())
 
-batch_size = 100
-n_iters = 5000
-num_epochs = n_iters / (len(train_dataset) / batch_size)
-num_epochs = int(num_epochs)
+
 
 train_loader = torch.utils.data.DataLoader(dataset=train_dataset, 
                                            batch_size=batch_size, 
@@ -46,6 +79,8 @@ train_loader = torch.utils.data.DataLoader(dataset=train_dataset,
 test_loader = torch.utils.data.DataLoader(dataset=test_dataset, 
                                           batch_size=batch_size, 
                                           shuffle=False)
+
+# Create RNN Model
 
 class RNNModel(nn.Module):
     def __init__(self, input_dim, hidden_dim, layer_dim, output_dim):
@@ -81,58 +116,70 @@ class RNNModel(nn.Module):
         # out.size() --> 100, 10
         return out
 
-input_dim = 28
-hidden_dim = 100
-layer_dim = 3
-output_dim = 10
+# batch_size, epoch and iteration
+batch_size = 100
+n_iters = 3000
+num_epochs = n_iters / (len(features_train) / batch_size)
+num_epochs = int(num_epochs)
 
+# Pytorch train and test sets
+train = torch.utils.data.TensorDataset(featuresTrain,targetsTrain)
+test = torch.utils.data.TensorDataset(featuresTest,targetsTest)
+
+# data loader
+train_loader = torch.utils.data.DataLoader(train, batch_size = batch_size, shuffle = False)
+test_loader = torch.utils.data.DataLoader(test, batch_size = batch_size, shuffle = False)
+    
+# Create RNN
+input_dim = 28    # input dimension
+hidden_dim = 100  # hidden layer dimension
+layer_dim = 3     # number of hidden layers
+output_dim = 10   # output dimension
 
 model = RNNModel(input_dim, hidden_dim, layer_dim, output_dim)
 
+# Cross Entropy Loss 
+error = nn.CrossEntropyLoss()
 
-print(model)
-print(len(list(model.parameters())))
-for i in range(len(list(model.parameters()))):
-    print(list(model.parameters())[i].size())
-    
-    
-learning_rate = 0.01
-min_val_loss = np.Inf
-epochs_no_improve = 0
-n_epochs_stop = 2
-early_stop = False
+# SGD Optimizer
+learning_rate = 0.05
+optimizer = torch.optim.SGD(model.parameters(), lr=learning_rate)
 
-optimizer = torch.optim.SGD(model.parameters(), lr=learning_rate) 
-# Number of steps to unroll 
-criterion = nn.CrossEntropyLoss()
-
-# Number of steps to unroll
 seq_dim = 28  
+loss_list = []
+iteration_list = []
+accuracy_list = []
+count = 0
+min_val_loss = np.Inf
+n_epochs_stop = 5
+val_array = []
+epochs_no_improve = 0
 early_stop = False
 iter = 0
+iter_array = []
+loss_array = []
+accuracy_array = []
 for epoch in range(num_epochs):
-    
     val_loss = 0
     for i, (images, labels) in enumerate(train_loader):
-        # Load images as a torch tensor with gradient accumulation abilities
-        images = images.view(-1, seq_dim, input_dim).requires_grad_()
 
-        # Clear gradients w.r.t. parameters
+        train  = Variable(images.view(-1, seq_dim, input_dim))
+        labels = Variable(labels )
+            
+        # Clear gradients
         optimizer.zero_grad()
-
-        # Forward pass to get output/logits
-        # outputs.size() --> 100, 10
-        outputs = model(images)
-
-        # Calculate Loss: softmax --> cross entropy loss
-        loss = criterion(outputs, labels)
-
-        # Getting gradients w.r.t. parameters
-        loss.backward()
-
-        # Updating parameters
-        optimizer.step()
         
+        # Forward propagation
+        outputs = model(train)
+        
+        # Calculate softmax and ross entropy loss
+        loss = error(outputs, labels)
+        
+        # Calculating gradients
+        loss.backward()
+        
+        # Update parameters
+        optimizer.step()
         val_loss += loss
         val_loss = val_loss / len(train_loader)
         # If the validation loss is at a minimum
@@ -150,6 +197,7 @@ for epoch in range(num_epochs):
             # Calculate Accuracy         
             correct = 0
             total = 0
+            print(iter)
             # Iterate through test dataset
   # Check early stopping condition
         if epochs_no_improve == n_epochs_stop:
@@ -166,6 +214,7 @@ for epoch in range(num_epochs):
         
         
     for images, labels in test_loader:
+        print(iter)
                 # Resize images
         images = images.view(-1, seq_dim, input_dim)
 
@@ -182,7 +231,26 @@ for epoch in range(num_epochs):
         correct += (predicted == labels).sum()
 
         accuracy = 100 * correct / total
+        iter_array.append(iter)
+        loss_array.append(loss.item())
+        accuracy_array.append(accuracy.item())
+        
+        #Print Loss
+    #if iter % 500 == 0:
+        print('Iteration: {}. Loss: {}. Accuracy: {}'.format(iter, loss.item(), accuracy.item()))
 
-            # Print Loss
-        print('Iteration: {}. Loss: {}. Accuracy: {}'.format(iter, loss.item(), accuracy))
-    
+examples = enumerate(test_loader)
+batch_idx, (images, labels) = next(examples)
+images = images.numpy()
+labels = labels.numpy()
+import matplotlib.pyplot as plt
+
+fig = plt.figure()
+for i in range(6):
+  plt.subplot(2,3,i+1)
+  plt.tight_layout()
+  plt.imshow(images[i].reshape(28,28), cmap='gray', interpolation='none')
+  plt.title("Number: {}".format(labels[i]))
+  plt.xticks([])
+  plt.yticks([])
+print(fig)
