@@ -3,7 +3,7 @@
 """
 Created on June 13 13:56:27 2019
 
-@author: manishrai
+@author: akhilesh rai
 """
 
 import torch
